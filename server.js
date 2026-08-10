@@ -6,9 +6,17 @@ const jwt = require('jsonwebtoken');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
+const cloudinary = require('cloudinary').v2;
+const { CloudinaryStorage } = require('multer-storage-cloudinary');
 const db = require('./db');
 
 dotenv.config();
+
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET
+});
 
 const app = express();
 app.use(cors());
@@ -22,14 +30,12 @@ if (!fs.existsSync(uploadsDir)) {
 }
 
 // Configure Multer
-const storage = multer.diskStorage({
-  destination: function (req, file, cb) {
-    cb(null, 'uploads/');
+const storage = new CloudinaryStorage({
+  cloudinary: cloudinary,
+  params: {
+    folder: 'maraki-food-uploads',
+    allowed_formats: ['jpg', 'png', 'jpeg', 'webp'],
   },
-  filename: function (req, file, cb) {
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    cb(null, uniqueSuffix + '-' + file.originalname);
-  }
 });
 const upload = multer({ storage: storage });
 
@@ -341,7 +347,7 @@ app.post('/api/reviews', authMiddleware, async (req, res) => {
 app.post('/api/menu_items', authMiddleware, upload.single('image'), async (req, res) => {
   try {
     const { name, description, price, is_available } = req.body;
-    const image_url = req.file ? '/uploads/' + req.file.filename : null;
+    const image_url = req.file ? req.file.path : null;
     const restaurant_id = req.user.restaurant_id;
     const available = is_available === 'false' ? 0 : 1;
 
@@ -370,7 +376,7 @@ app.put('/api/menu_items/:id', authMiddleware, upload.single('image'), async (re
 
     if (req.file) {
       updateQuery += ', image_url = $5';
-      params.push('/uploads/' + req.file.filename);
+      params.push(req.file.path);
       params.push(id, restaurant_id);
       updateQuery += ' WHERE id = $6 AND restaurant_id = $7 RETURNING *';
     } else {
@@ -418,7 +424,7 @@ app.post('/api/orders', upload.single('receipt'), async (req, res) => {
       items = JSON.parse(items);
     }
     
-    const receipt_screenshot = req.file ? req.file.filename : null;
+    const receipt_screenshot = req.file ? req.file.path : null;
 
     // Begin transaction
     await db.query('BEGIN');
