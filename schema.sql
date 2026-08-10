@@ -9,7 +9,7 @@ DROP TABLE IF EXISTS users;
 
 -- Users Table (Customers, Admins, Drivers)
 CREATE TABLE users (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id SERIAL PRIMARY KEY,
     name VARCHAR(100) NOT NULL,
     email VARCHAR(255) UNIQUE NOT NULL,
     password VARCHAR(255) NOT NULL,
@@ -19,7 +19,7 @@ CREATE TABLE users (
 
 -- Restaurants Table
 CREATE TABLE restaurants (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id SERIAL PRIMARY KEY,
     name VARCHAR(255) NOT NULL,
     description TEXT,
     image_url VARCHAR(255),
@@ -29,7 +29,7 @@ CREATE TABLE restaurants (
 
 -- Menu Items Table
 CREATE TABLE menu_items (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id SERIAL PRIMARY KEY,
     restaurant_id INTEGER REFERENCES restaurants(id) ON DELETE CASCADE,
     name VARCHAR(255) NOT NULL,
     description TEXT,
@@ -40,7 +40,7 @@ CREATE TABLE menu_items (
 
 -- Orders Table
 CREATE TABLE orders (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id SERIAL PRIMARY KEY,
     user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
     restaurant_id INTEGER REFERENCES restaurants(id) ON DELETE SET NULL,
     total_amount DECIMAL(10,2) NOT NULL,
@@ -55,7 +55,7 @@ CREATE TABLE orders (
 
 -- Order Items Table
 CREATE TABLE order_items (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id SERIAL PRIMARY KEY,
     order_id INTEGER REFERENCES orders(id) ON DELETE CASCADE,
     menu_item_id INTEGER REFERENCES menu_items(id),
     quantity INTEGER NOT NULL,
