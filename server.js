@@ -9,6 +9,9 @@ const fs = require('fs');
 const cloudinary = require('cloudinary').v2;
 const { CloudinaryStorage } = require('multer-storage-cloudinary');
 const db = require('./db');
+const { OAuth2Client } = require('google-auth-library');
+
+const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID || '263003067668-905gsnee1qhb06qfse1efc7f5l9ojid6.apps.googleusercontent.com');
 
 dotenv.config();
 
@@ -109,6 +112,57 @@ app.post('/api/auth/login', async (req, res) => {
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: 'Server error' });
+  }
+});
+
+app.post('/api/auth/google', async (req, res) => {
+  try {
+    const { token } = req.body;
+    const ticket = await googleClient.verifyIdToken({
+        idToken: token,
+        audience: process.env.GOOGLE_CLIENT_ID || '263003067668-905gsnee1qhb06qfse1efc7f5l9ojid6.apps.googleusercontent.com',
+    });
+    const payload = ticket.getPayload();
+    const { email, name, sub: googleId } = payload;
+
+    // Check if user exists
+    let userResult = await db.query('SELECT * FROM users WHERE email = $1', [email]);
+    
+    if (userResult.rows.length === 0) {
+      // Create user if they don't exist
+      // Since it's google, we generate a random dummy password
+      const salt = await bcrypt.genSalt(10);
+      const randomPassword = await bcrypt.hash(Math.random().toString(36).slice(-8), salt);
+      
+      const insertResult = await db.query(
+        'INSERT INTO users (email, password, name, role) VALUES ($1, $2, $3, $4) RETURNING *',
+        [email, randomPassword, name, 'customer']
+      );
+      userResult = insertResult;
+    }
+
+    const user = userResult.rows[0];
+
+    // Create JWT
+    const jwtToken = jwt.sign(
+      { id: user.id, role: user.role, restaurant_id: user.restaurant_id },
+      process.env.JWT_SECRET,
+      { expiresIn: '1d' }
+    );
+
+    res.json({ 
+      token: jwtToken, 
+      user: { 
+        id: user.id, 
+        email: user.email, 
+        name: user.name, 
+        role: user.role,
+        restaurant_id: user.restaurant_id
+      } 
+    });
+  } catch (error) {
+    console.error('Google auth error:', error);
+    res.status(401).json({ error: 'Invalid Google token' });
   }
 });
 
