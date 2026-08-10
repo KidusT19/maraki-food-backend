@@ -451,14 +451,16 @@ app.post('/api/orders', upload.single('receipt'), async (req, res) => {
   }
 });
 
-app.get('/api/orders', async (req, res) => {
+app.get('/api/orders', authMiddleware, async (req, res) => {
   try {
+    const user_id = req.user.id;
     const ordersResult = await db.query(`
       SELECT o.*, r.name as restaurant_name 
       FROM orders o 
       LEFT JOIN restaurants r ON o.restaurant_id = r.id 
+      WHERE o.user_id = $1
       ORDER BY o.created_at DESC
-    `);
+    `, [user_id]);
     
     const orders = ordersResult.rows;
     
