@@ -726,26 +726,23 @@ app.get('/api/chat/contacts', authMiddleware, async (req, res) => {
     
     let contacts = [];
     if (role === 'restaurant') {
-      const rest_id = req.user.restaurant_id;
-      // Get all drivers who have taken orders from this restaurant
+      // Get all drivers in the system
       const query = `
-        SELECT DISTINCT u.id, u.name, u.email, u.role
-        FROM users u
-        JOIN orders o ON o.driver_id = u.id
-        WHERE o.restaurant_id = $1
+        SELECT id, name, email, role
+        FROM users
+        WHERE role = 'driver'
       `;
-      const result = await db.query(query, [rest_id]);
+      const result = await db.query(query);
       contacts = result.rows;
     } else if (role === 'driver') {
-      // Get all restaurants this driver has delivered for, specifically their owner user accounts
+      // Get all restaurants in the system
       const query = `
-        SELECT DISTINCT u.id, u.name, u.email, u.role, r.name as restaurant_name
+        SELECT u.id, r.name as restaurant_name, u.email, u.role
         FROM users u
         JOIN restaurants r ON u.restaurant_id = r.id
-        JOIN orders o ON o.restaurant_id = r.id
-        WHERE o.driver_id = $1 AND u.role = 'restaurant'
+        WHERE u.role = 'restaurant'
       `;
-      const result = await db.query(query, [user_id]);
+      const result = await db.query(query);
       contacts = result.rows.map(c => ({
         ...c,
         name: c.restaurant_name // display the restaurant name for the driver
