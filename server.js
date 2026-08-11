@@ -36,6 +36,11 @@ app.use(cors());
 app.use(express.json());
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
+// Redirect root to frontend landing page
+app.get('/', (req, res) => {
+  res.redirect('https://maraki-food-frontend.vercel.app'); // Adjust URL as needed
+});
+
 // Ensure uploads directory exists
 const uploadsDir = path.join(__dirname, 'uploads');
 if (!fs.existsSync(uploadsDir)) {
@@ -480,6 +485,23 @@ app.delete('/api/menu_items/:id', authMiddleware, async (req, res) => {
 // Order Routes
 app.post('/api/orders', upload.single('receipt'), async (req, res) => {
   try {
+    // Check ordering windows (Ethiopian Time)
+    const now = new Date();
+    const eatTimeStr = now.toLocaleTimeString('en-US', { timeZone: 'Africa/Addis_Ababa', hour12: false });
+    let [hourStr, minuteStr] = eatTimeStr.split(':');
+    if (hourStr === '24') hourStr = '0';
+    const eatHour = parseInt(hourStr, 10);
+    const eatMinute = parseInt(minuteStr, 10);
+    const currentDecimalTime = eatHour + (eatMinute / 60);
+
+    const isBreakfast = currentDecimalTime >= 6 && currentDecimalTime <= 9;
+    const isLunch = currentDecimalTime >= 10 && currentDecimalTime <= 14;
+    const isDinner = currentDecimalTime >= 17 && currentDecimalTime <= 19;
+
+    if (!isBreakfast && !isLunch && !isDinner) {
+      return res.status(403).json({ error: 'Outside of ordering windows (12-3 LT, 4-8 LT, 11-1 LT)' });
+    }
+
     const { user_id, restaurant_id, total_amount, transaction_id, delivery_address, customer_phone } = req.body;
     let items = req.body.items;
     
