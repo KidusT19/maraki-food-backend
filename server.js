@@ -10,6 +10,8 @@ const cloudinary = require('cloudinary').v2;
 const { CloudinaryStorage } = require('multer-storage-cloudinary');
 const db = require('./db');
 const { OAuth2Client } = require('google-auth-library');
+const http = require('http');
+const { Server } = require('socket.io');
 
 const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID || '263003067668-905gsnee1qhb06qfse1efc7f5l9ojid6.apps.googleusercontent.com');
 
@@ -22,6 +24,14 @@ cloudinary.config({
 });
 
 const app = express();
+const server = http.createServer(app);
+const io = new Server(server, {
+  cors: {
+    origin: "*", // allow all origins
+    methods: ["GET", "POST", "PUT", "DELETE"]
+  }
+});
+
 app.use(cors());
 app.use(express.json());
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
@@ -707,7 +717,113 @@ app.put('/api/orders/:id/status', async (req, res) => {
   }
 });
 
+// --- CHAT ROUTES & SOCKET.IO ---
+
+app.get('/api/chat/contacts', authMiddleware, async (req, res) => {
+  try {
+    const user_id = req.user.id;
+    const role = req.user.role;
+    
+    let contacts = [];
+    if (role === 'restaurant') {
+      const rest_id = req.user.restaurant_id;
+      // Get all drivers who have taken orders from this restaurant
+      const query = `
+        SELECT DISTINCT u.id, u.name, u.email, u.role
+        FROM users u
+        JOIN orders o ON o.driver_id = u.id
+        WHERE o.restaurant_id = $1
+      `;
+      const result = await db.query(query, [rest_id]);
+      contacts = result.rows;
+    } else if (role === 'driver') {
+      // Get all restaurants this driver has delivered for, specifically their owner user accounts
+      const query = `
+        SELECT DISTINCT u.id, u.name, u.email, u.role, r.name as restaurant_name
+        FROM users u
+        JOIN restaurants r ON u.restaurant_id = r.id
+        JOIN orders o ON o.restaurant_id = r.id
+        WHERE o.driver_id = $1 AND u.role = 'restaurant'
+      `;
+      const result = await db.query(query, [user_id]);
+      contacts = result.rows.map(c => ({
+        ...c,
+        name: c.restaurant_name // display the restaurant name for the driver
+      }));
+    }
+    
+    res.json(contacts);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+app.get('/api/chat/history/:otherUserId', authMiddleware, async (req, res) => {
+  try {
+    const user_id = req.user.id;
+    const other_id = req.params.otherUserId;
+    
+    const query = `
+      SELECT * FROM chat_messages 
+      WHERE (sender_id = $1 AND receiver_id = $2)
+         OR (sender_id = $2 AND receiver_id = $1)
+      ORDER BY created_at ASC
+    `;
+    const result = await db.query(query, [user_id, other_id]);
+    res.json(result.rows);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// Socket.io Auth Middleware
+io.use((socket, next) => {
+  const token = socket.handshake.auth.token;
+  if (!token) return next(new Error('Authentication error'));
+  try {
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    socket.user = decoded;
+    next();
+  } catch (err) {
+    next(new Error('Authentication error'));
+  }
+});
+
+io.on('connection', (socket) => {
+  console.log(`User connected to chat: ${socket.user.id}`);
+  
+  // Join a personal room based on user ID to receive messages
+  socket.join(`user_${socket.user.id}`);
+
+  socket.on('send_message', async (data) => {
+    try {
+      const { receiver_id, message } = data;
+      const sender_id = socket.user.id;
+      
+      // Save to DB
+      const result = await db.query(
+        'INSERT INTO chat_messages (sender_id, receiver_id, message) VALUES ($1, $2, $3) RETURNING *',
+        [sender_id, receiver_id, message]
+      );
+      
+      const savedMessage = result.rows[0];
+      
+      // Emit back to sender (for confirmation) and to receiver
+      io.to(`user_${sender_id}`).emit('receive_message', savedMessage);
+      io.to(`user_${receiver_id}`).emit('receive_message', savedMessage);
+    } catch (err) {
+      console.error('Socket send_message error:', err);
+    }
+  });
+
+  socket.on('disconnect', () => {
+    console.log(`User disconnected from chat: ${socket.user.id}`);
+  });
+});
+
 const PORT = process.env.PORT || 5000;
-app.listen(PORT, '0.0.0.0', () => {
+server.listen(PORT, '0.0.0.0', () => {
   console.log(`Server running on port ${PORT}`);
 });
