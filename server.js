@@ -654,19 +654,61 @@ app.get('/api/orders/restaurant/customers', authMiddleware, async (req, res) => 
 app.get('/api/orders/driver', authMiddleware, async (req, res) => {
   try {
     const driver_id = req.user.id;
-    // Drivers should see:
-    // 1. Orders that are preparing/ready AND have no driver assigned
-    // 2. Orders assigned specifically to them
-    const orders = await db.query(`
-      SELECT o.*, r.name as restaurant_name, u.name as customer_name
-      FROM orders o 
-      LEFT JOIN restaurants r ON o.restaurant_id = r.id 
-      LEFT JOIN users u ON o.user_id = u.id
-      WHERE (o.status IN ('pending', 'preparing', 'ready') AND o.driver_id IS NULL)
-         OR (o.driver_id = $1)
+    // Driver can see orders with no driver assigned (pending/preparing) OR their own orders
+    const query = `
+      SELECT o.*, u.name as customer_name, u.email as customer_email, r.name as restaurant_name 
+      FROM orders o
+      JOIN users u ON o.user_id = u.id
+      JOIN restaurants r ON o.restaurant_id = r.id
+      WHERE o.driver_id IS NULL OR o.driver_id = $1
       ORDER BY o.created_at DESC
-    `, [driver_id]);
-    res.json(orders.rows);
+    `;
+    const result = await db.query(query, [driver_id]);
+    res.json(result.rows);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// Driver Earnings Dashboard
+app.get('/api/orders/driver/earnings', authMiddleware, async (req, res) => {
+  try {
+    const driver_id = req.user.id;
+    const FLAT_FEE = 50; // ETB
+
+    const query = `
+      SELECT id, created_at, total_amount
+      FROM orders 
+      WHERE driver_id = $1 AND status = 'DELIVERED'
+      ORDER BY created_at DESC
+    `;
+    const result = await db.query(query, [driver_id]);
+    const orders = result.rows;
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    
+    const oneWeekAgo = new Date();
+    oneWeekAgo.setDate(oneWeekAgo.getDate() - 7);
+    oneWeekAgo.setHours(0, 0, 0, 0);
+
+    let todayCount = 0;
+    let weekCount = 0;
+
+    orders.forEach(o => {
+      const d = new Date(o.created_at);
+      if (d >= today) todayCount++;
+      if (d >= oneWeekAgo) weekCount++;
+    });
+
+    res.json({
+      todayEarnings: todayCount * FLAT_FEE,
+      weeklyEarnings: weekCount * FLAT_FEE,
+      totalEarnings: orders.length * FLAT_FEE,
+      totalDeliveries: orders.length,
+      recentDeliveries: orders.slice(0, 20) // send top 20 for the ledger
+    });
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: 'Server error' });
