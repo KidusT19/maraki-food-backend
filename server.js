@@ -680,7 +680,7 @@ app.get('/api/orders/driver/earnings', authMiddleware, async (req, res) => {
     const query = `
       SELECT id, created_at, total_amount
       FROM orders 
-      WHERE driver_id = $1 AND status = 'DELIVERED'
+      WHERE driver_id = $1 AND status = 'delivered'
       ORDER BY created_at DESC
     `;
     const result = await db.query(query, [driver_id]);
