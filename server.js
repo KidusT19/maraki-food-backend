@@ -761,6 +761,12 @@ app.get('/api/chat/history/:otherUserId', authMiddleware, async (req, res) => {
     const user_id = req.user.id;
     const other_id = req.params.otherUserId;
     
+    // Mark messages as read when fetching history
+    await db.query(
+      'UPDATE chat_messages SET is_read = true WHERE receiver_id = $1 AND sender_id = $2 AND is_read = false',
+      [user_id, other_id]
+    );
+
     const query = `
       SELECT * FROM chat_messages 
       WHERE (sender_id = $1 AND receiver_id = $2)
@@ -769,6 +775,20 @@ app.get('/api/chat/history/:otherUserId', authMiddleware, async (req, res) => {
     `;
     const result = await db.query(query, [user_id, other_id]);
     res.json(result.rows);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+app.get('/api/chat/unread', authMiddleware, async (req, res) => {
+  try {
+    const user_id = req.user.id;
+    const result = await db.query(
+      'SELECT COUNT(*) FROM chat_messages WHERE receiver_id = $1 AND is_read = false',
+      [user_id]
+    );
+    res.json({ unread: parseInt(result.rows[0].count) });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Server error' });
