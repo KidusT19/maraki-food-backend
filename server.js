@@ -10,7 +10,7 @@ const cloudinary = require('cloudinary').v2;
 const { CloudinaryStorage } = require('multer-storage-cloudinary');
 const db = require('./db');
 const { OAuth2Client } = require('google-auth-library');
-const nodemailer = require('nodemailer');
+
 const http = require('http');
 const { Server } = require('socket.io');
 const migrateEmail = require('./migrate_email');
@@ -18,14 +18,7 @@ const migrateEmail = require('./migrate_email');
 // Run migration on startup
 migrateEmail().catch(console.error);
 
-// Initialize Nodemailer
-const transporter = nodemailer.createTransport({
-  service: 'gmail',
-  auth: {
-    user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_PASS
-  }
-});
+
 
 async function sendOtpCode(userId, email) {
   if (!email) return;
@@ -38,17 +31,31 @@ async function sendOtpCode(userId, email) {
     [userId, otpCode, expiresAt]
   );
 
-  // Send via Nodemailer (or mock if not configured)
-  if (process.env.EMAIL_USER && process.env.EMAIL_PASS) {
+  // Send via Brevo API (or mock if not configured)
+  if (process.env.BREVO_API_KEY && process.env.SENDER_EMAIL) {
     try {
-      await transporter.sendMail({
-        from: `"Maraki Food Zones" <${process.env.EMAIL_USER}>`,
-        to: email,
-        subject: "Your Verification Code",
-        text: `Your Maraki Food verification code is: ${otpCode}`,
-        html: `<h3>Your Maraki Food verification code is:</h3><h1>${otpCode}</h1>`
+      const response = await fetch('https://api.brevo.com/v3/smtp/email', {
+        method: 'POST',
+        headers: {
+          'Accept': 'application/json',
+          'Content-Type': 'application/json',
+          'api-key': process.env.BREVO_API_KEY
+        },
+        body: JSON.stringify({
+          sender: { name: "Maraki Food Zones", email: process.env.SENDER_EMAIL },
+          to: [{ email: email }],
+          subject: "Your Verification Code",
+          htmlContent: `<h3>Your Maraki Food verification code is:</h3><h1>${otpCode}</h1>`,
+          textContent: `Your Maraki Food verification code is: ${otpCode}`
+        })
       });
-      console.log(`[Email] Sent OTP to ${email}`);
+
+      if (!response.ok) {
+        const errData = await response.text();
+        console.error(`[Email Error] Failed to send email via Brevo:`, errData);
+      } else {
+        console.log(`[Email] Sent OTP to ${email} via Brevo`);
+      }
     } catch (err) {
       console.error(`[Email Error] Failed to send email:`, err);
     }
