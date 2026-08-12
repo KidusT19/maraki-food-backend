@@ -10,8 +10,46 @@ const cloudinary = require('cloudinary').v2;
 const { CloudinaryStorage } = require('multer-storage-cloudinary');
 const db = require('./db');
 const { OAuth2Client } = require('google-auth-library');
+const twilio = require('twilio');
 const http = require('http');
 const { Server } = require('socket.io');
+
+// Initialize Twilio
+const twilioClient = process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN 
+  ? twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN) 
+  : null;
+
+async function sendOtpCode(userId, phoneNumber) {
+  if (!phoneNumber) return;
+  const otpCode = Math.floor(100000 + Math.random() * 900000).toString(); // 6 digit code
+  const expiresAt = new Date(Date.now() + 5 * 60 * 1000); // 5 minutes
+
+  // Store in DB
+  await db.query(
+    'INSERT INTO otp_codes (user_id, phone_number, code, expires_at) VALUES ($1, $2, $3, $4)',
+    [userId, phoneNumber, otpCode, expiresAt]
+  );
+
+  // Send via Twilio (or mock if not configured)
+  if (twilioClient && process.env.TWILIO_PHONE_NUMBER) {
+    try {
+      await twilioClient.messages.create({
+        body: `Your Maraki Food verification code is: ${otpCode}`,
+        from: process.env.TWILIO_PHONE_NUMBER,
+        to: phoneNumber
+      });
+      console.log(`[Twilio] Sent OTP to ${phoneNumber}`);
+    } catch (err) {
+      console.error(`[Twilio Error] Failed to send SMS:`, err);
+    }
+  } else {
+    // Mock SMS
+    console.log(`\n========================================`);
+    console.log(`[MOCK SMS] To: ${phoneNumber}`);
+    console.log(`[MOCK SMS] Body: Your Maraki Food verification code is: ${otpCode}`);
+    console.log(`========================================\n`);
+  }
+}
 
 const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID || '263003067668-905gsnee1qhb06qfse1efc7f5l9ojid6.apps.googleusercontent.com');
 
@@ -65,7 +103,7 @@ app.get('/api/health', (req, res) => {
 // Authentication Routes
 app.post('/api/auth/register', async (req, res) => {
   try {
-    const { email, password, name, role = 'customer' } = req.body;
+    const { email, password, name, phone_number, role = 'customer' } = req.body;
     
     // Check if user exists
     const userCheck = await db.query('SELECT * FROM users WHERE email = $1', [email]);
@@ -79,13 +117,83 @@ app.post('/api/auth/register', async (req, res) => {
 
     // Insert user
     const newUser = await db.query(
-      'INSERT INTO users (email, password, name, role) VALUES ($1, $2, $3, $4) RETURNING id, email, name, role',
-      [email, hashedPassword, name, role]
+      'INSERT INTO users (email, password, name, phone_number, is_phone_verified, role) VALUES ($1, $2, $3, $4, false, $5) RETURNING id, email, name, role, phone_number, is_phone_verified',
+      [email, hashedPassword, name, phone_number, role]
     );
 
-    res.status(201).json(newUser.rows[0]);
+    // Send OTP
+    await sendOtpCode(newUser.rows[0].id, phone_number);
+
+    res.status(201).json({ 
+      message: 'Registration successful. Please verify phone number.', 
+      userId: newUser.rows[0].id,
+      requiresVerification: true 
+    });
   } catch (error) {
     console.error(error);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// Resend OTP endpoint
+app.post('/api/auth/send-otp', async (req, res) => {
+  try {
+    const { userId, phone_number } = req.body;
+    if (!userId || !phone_number) return res.status(400).json({ error: 'Missing parameters' });
+    
+    // Optional: update phone number if it changed
+    await db.query('UPDATE users SET phone_number = $1 WHERE id = $2', [phone_number, userId]);
+    
+    await sendOtpCode(userId, phone_number);
+    res.json({ success: true, message: 'OTP sent successfully' });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// Verify OTP endpoint
+app.post('/api/auth/verify-otp', async (req, res) => {
+  try {
+    const { userId, code } = req.body;
+    
+    // Find latest valid code
+    const otpCheck = await db.query(
+      'SELECT * FROM otp_codes WHERE user_id = $1 AND code = $2 AND expires_at > NOW() ORDER BY created_at DESC LIMIT 1',
+      [userId, code]
+    );
+    
+    if (otpCheck.rows.length === 0) {
+      return res.status(400).json({ error: 'Invalid or expired verification code' });
+    }
+    
+    // Mark as verified
+    await db.query('UPDATE users SET is_phone_verified = true WHERE id = $1', [userId]);
+    
+    // Fetch full user to log them in
+    const userResult = await db.query('SELECT * FROM users WHERE id = $1', [userId]);
+    const user = userResult.rows[0];
+    
+    // Create JWT
+    const token = jwt.sign(
+      { id: user.id, role: user.role, restaurant_id: user.restaurant_id },
+      process.env.JWT_SECRET,
+      { expiresIn: '1d' }
+    );
+
+    res.json({ 
+      token, 
+      user: { 
+        id: user.id, 
+        email: user.email, 
+        name: user.name, 
+        role: user.role,
+        restaurant_id: user.restaurant_id,
+        is_phone_verified: true
+      } 
+    });
+  } catch (err) {
+    console.error(err);
     res.status(500).json({ error: 'Server error' });
   }
 });
@@ -96,32 +204,45 @@ app.post('/api/auth/login', async (req, res) => {
     const { email, password } = req.body;
     
     // Find user
-    const user = await db.query('SELECT * FROM users WHERE email = $1', [email]);
-    if (user.rows.length === 0) {
+    const userResult = await db.query('SELECT * FROM users WHERE email = $1', [email]);
+    if (userResult.rows.length === 0) {
       return res.status(401).json({ error: 'Invalid credentials' });
     }
+    
+    const user = userResult.rows[0];
 
     // Check password
-    const validPassword = await bcrypt.compare(password, user.rows[0].password);
+    const validPassword = await bcrypt.compare(password, user.password);
     if (!validPassword) {
       return res.status(401).json({ error: 'Invalid credentials' });
+    }
+    
+    // Check phone verification
+    if (user.role === 'customer' && user.is_phone_verified === false) {
+      await sendOtpCode(user.id, user.phone_number);
+      return res.status(401).json({ 
+        error: 'requires_verification', 
+        userId: user.id, 
+        message: 'Please verify your phone number.' 
+      });
     }
 
     // Create JWT
     const token = jwt.sign(
-      { id: user.rows[0].id, role: user.rows[0].role, restaurant_id: user.rows[0].restaurant_id },
+      { id: user.id, role: user.role, restaurant_id: user.restaurant_id },
       process.env.JWT_SECRET,
-      { expiresIn: '365d' }
+      { expiresIn: '1d' }
     );
 
     res.json({ 
       token, 
       user: { 
-        id: user.rows[0].id, 
-        email: user.rows[0].email, 
-        name: user.rows[0].name, 
-        role: user.rows[0].role,
-        restaurant_id: user.rows[0].restaurant_id
+        id: user.id, 
+        email: user.email, 
+        name: user.name, 
+        role: user.role,
+        restaurant_id: user.restaurant_id,
+        is_phone_verified: user.is_phone_verified
       } 
     });
   } catch (error) {
@@ -150,7 +271,7 @@ app.post('/api/auth/google', async (req, res) => {
       const randomPassword = await bcrypt.hash(Math.random().toString(36).slice(-8), salt);
       
       const insertResult = await db.query(
-        'INSERT INTO users (email, password, name, role) VALUES ($1, $2, $3, $4) RETURNING *',
+        'INSERT INTO users (email, password, name, role, is_phone_verified) VALUES ($1, $2, $3, $4, false) RETURNING *',
         [email, randomPassword, name, 'customer']
       );
       userResult = insertResult;
@@ -158,11 +279,24 @@ app.post('/api/auth/google', async (req, res) => {
 
     const user = userResult.rows[0];
 
+    // Check phone verification
+    if (user.role === 'customer' && user.is_phone_verified === false) {
+      // We might have their phone number from before if they tried and failed to verify
+      if (user.phone_number) {
+        await sendOtpCode(user.id, user.phone_number);
+      }
+      return res.status(401).json({ 
+        error: 'requires_verification', 
+        userId: user.id, 
+        message: 'Please verify your phone number.' 
+      });
+    }
+
     // Create JWT
     const jwtToken = jwt.sign(
       { id: user.id, role: user.role, restaurant_id: user.restaurant_id },
       process.env.JWT_SECRET,
-      { expiresIn: '365d' }
+      { expiresIn: '1d' }
     );
 
     res.json({ 
