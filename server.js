@@ -13,6 +13,10 @@ const { OAuth2Client } = require('google-auth-library');
 const twilio = require('twilio');
 const http = require('http');
 const { Server } = require('socket.io');
+const migratePhone = require('./migrate_phone');
+
+// Run migration on startup
+migratePhone().catch(console.error);
 
 // Initialize Twilio
 const twilioClient = process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN 
