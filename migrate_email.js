@@ -19,6 +19,11 @@ async function migrateEmail() {
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
     `);
+
+    // Drop the phone_number column if it exists from the previous migration, as it had a NOT NULL constraint
+    await pool.query(`
+      ALTER TABLE otp_codes DROP COLUMN IF EXISTS phone_number;
+    `);
     
     console.log("Email Verification Migration completed successfully.");
   } catch (error) {
