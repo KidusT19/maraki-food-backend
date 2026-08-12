@@ -10,47 +10,53 @@ const cloudinary = require('cloudinary').v2;
 const { CloudinaryStorage } = require('multer-storage-cloudinary');
 const db = require('./db');
 const { OAuth2Client } = require('google-auth-library');
-const twilio = require('twilio');
+const nodemailer = require('nodemailer');
 const http = require('http');
 const { Server } = require('socket.io');
-const migratePhone = require('./migrate_phone');
+const migrateEmail = require('./migrate_email');
 
 // Run migration on startup
-migratePhone().catch(console.error);
+migrateEmail().catch(console.error);
 
-// Initialize Twilio
-const twilioClient = process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN 
-  ? twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN) 
-  : null;
+// Initialize Nodemailer
+const transporter = nodemailer.createTransport({
+  service: 'gmail',
+  auth: {
+    user: process.env.EMAIL_USER,
+    pass: process.env.EMAIL_PASS
+  }
+});
 
-async function sendOtpCode(userId, phoneNumber) {
-  if (!phoneNumber) return;
+async function sendOtpCode(userId, email) {
+  if (!email) return;
   const otpCode = Math.floor(100000 + Math.random() * 900000).toString(); // 6 digit code
   const expiresAt = new Date(Date.now() + 5 * 60 * 1000); // 5 minutes
 
   // Store in DB
   await db.query(
-    'INSERT INTO otp_codes (user_id, phone_number, code, expires_at) VALUES ($1, $2, $3, $4)',
-    [userId, phoneNumber, otpCode, expiresAt]
+    'INSERT INTO otp_codes (user_id, code, expires_at) VALUES ($1, $2, $3)',
+    [userId, otpCode, expiresAt]
   );
 
-  // Send via Twilio (or mock if not configured)
-  if (twilioClient && process.env.TWILIO_PHONE_NUMBER) {
+  // Send via Nodemailer (or mock if not configured)
+  if (process.env.EMAIL_USER && process.env.EMAIL_PASS) {
     try {
-      await twilioClient.messages.create({
-        body: `Your Maraki Food verification code is: ${otpCode}`,
-        from: process.env.TWILIO_PHONE_NUMBER,
-        to: phoneNumber
+      await transporter.sendMail({
+        from: `"Maraki Food Zones" <${process.env.EMAIL_USER}>`,
+        to: email,
+        subject: "Your Verification Code",
+        text: `Your Maraki Food verification code is: ${otpCode}`,
+        html: `<h3>Your Maraki Food verification code is:</h3><h1>${otpCode}</h1>`
       });
-      console.log(`[Twilio] Sent OTP to ${phoneNumber}`);
+      console.log(`[Email] Sent OTP to ${email}`);
     } catch (err) {
-      console.error(`[Twilio Error] Failed to send SMS:`, err);
+      console.error(`[Email Error] Failed to send email:`, err);
     }
   } else {
-    // Mock SMS
+    // Mock Email
     console.log(`\n========================================`);
-    console.log(`[MOCK SMS] To: ${phoneNumber}`);
-    console.log(`[MOCK SMS] Body: Your Maraki Food verification code is: ${otpCode}`);
+    console.log(`[MOCK EMAIL] To: ${email}`);
+    console.log(`[MOCK EMAIL] Body: Your Maraki Food verification code is: ${otpCode}`);
     console.log(`========================================\n`);
   }
 }
@@ -107,7 +113,7 @@ app.get('/api/health', (req, res) => {
 // Authentication Routes
 app.post('/api/auth/register', async (req, res) => {
   try {
-    const { email, password, name, phone_number, role = 'customer' } = req.body;
+    const { email, password, name, role = 'customer' } = req.body;
     
     // Check if user exists
     const userCheck = await db.query('SELECT * FROM users WHERE email = $1', [email]);
@@ -121,15 +127,15 @@ app.post('/api/auth/register', async (req, res) => {
 
     // Insert user
     const newUser = await db.query(
-      'INSERT INTO users (email, password, name, phone_number, is_phone_verified, role) VALUES ($1, $2, $3, $4, false, $5) RETURNING id, email, name, role, phone_number, is_phone_verified',
-      [email, hashedPassword, name, phone_number, role]
+      'INSERT INTO users (email, password, name, is_email_verified, role) VALUES ($1, $2, $3, false, $4) RETURNING id, email, name, role, is_email_verified',
+      [email, hashedPassword, name, role]
     );
 
     // Send OTP
-    await sendOtpCode(newUser.rows[0].id, phone_number);
+    await sendOtpCode(newUser.rows[0].id, email);
 
     res.status(201).json({ 
-      message: 'Registration successful. Please verify phone number.', 
+      message: 'Registration successful. Please verify email.', 
       userId: newUser.rows[0].id,
       requiresVerification: true 
     });
@@ -142,13 +148,10 @@ app.post('/api/auth/register', async (req, res) => {
 // Resend OTP endpoint
 app.post('/api/auth/send-otp', async (req, res) => {
   try {
-    const { userId, phone_number } = req.body;
-    if (!userId || !phone_number) return res.status(400).json({ error: 'Missing parameters' });
+    const { userId, email } = req.body;
+    if (!userId || !email) return res.status(400).json({ error: 'Missing parameters' });
     
-    // Optional: update phone number if it changed
-    await db.query('UPDATE users SET phone_number = $1 WHERE id = $2', [phone_number, userId]);
-    
-    await sendOtpCode(userId, phone_number);
+    await sendOtpCode(userId, email);
     res.json({ success: true, message: 'OTP sent successfully' });
   } catch (err) {
     console.error(err);
@@ -172,7 +175,7 @@ app.post('/api/auth/verify-otp', async (req, res) => {
     }
     
     // Mark as verified
-    await db.query('UPDATE users SET is_phone_verified = true WHERE id = $1', [userId]);
+    await db.query('UPDATE users SET is_email_verified = true WHERE id = $1', [userId]);
     
     // Fetch full user to log them in
     const userResult = await db.query('SELECT * FROM users WHERE id = $1', [userId]);
@@ -193,7 +196,7 @@ app.post('/api/auth/verify-otp', async (req, res) => {
         name: user.name, 
         role: user.role,
         restaurant_id: user.restaurant_id,
-        is_phone_verified: true
+        is_email_verified: true
       } 
     });
   } catch (err) {
@@ -221,13 +224,14 @@ app.post('/api/auth/login', async (req, res) => {
       return res.status(401).json({ error: 'Invalid credentials' });
     }
     
-    // Check phone verification
-    if (user.role === 'customer' && user.is_phone_verified === false) {
-      await sendOtpCode(user.id, user.phone_number);
+    // Check email verification
+    if (user.role === 'customer' && user.is_email_verified === false) {
+      await sendOtpCode(user.id, user.email);
       return res.status(401).json({ 
         error: 'requires_verification', 
         userId: user.id, 
-        message: 'Please verify your phone number.' 
+        email: user.email,
+        message: 'Please verify your email.' 
       });
     }
 
@@ -246,7 +250,7 @@ app.post('/api/auth/login', async (req, res) => {
         name: user.name, 
         role: user.role,
         restaurant_id: user.restaurant_id,
-        is_phone_verified: user.is_phone_verified
+        is_email_verified: user.is_email_verified
       } 
     });
   } catch (error) {
@@ -275,7 +279,7 @@ app.post('/api/auth/google', async (req, res) => {
       const randomPassword = await bcrypt.hash(Math.random().toString(36).slice(-8), salt);
       
       const insertResult = await db.query(
-        'INSERT INTO users (email, password, name, role, is_phone_verified) VALUES ($1, $2, $3, $4, false) RETURNING *',
+        'INSERT INTO users (email, password, name, role, is_email_verified) VALUES ($1, $2, $3, $4, false) RETURNING *',
         [email, randomPassword, name, 'customer']
       );
       userResult = insertResult;
@@ -283,16 +287,14 @@ app.post('/api/auth/google', async (req, res) => {
 
     const user = userResult.rows[0];
 
-    // Check phone verification
-    if (user.role === 'customer' && user.is_phone_verified === false) {
-      // We might have their phone number from before if they tried and failed to verify
-      if (user.phone_number) {
-        await sendOtpCode(user.id, user.phone_number);
-      }
+    // Check email verification
+    if (user.role === 'customer' && user.is_email_verified === false) {
+      await sendOtpCode(user.id, user.email);
       return res.status(401).json({ 
         error: 'requires_verification', 
         userId: user.id, 
-        message: 'Please verify your phone number.' 
+        email: user.email,
+        message: 'Please verify your email.' 
       });
     }
 
