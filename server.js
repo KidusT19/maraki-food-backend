@@ -111,7 +111,7 @@ app.post('/api/auth/login', async (req, res) => {
     const token = jwt.sign(
       { id: user.rows[0].id, role: user.rows[0].role, restaurant_id: user.rows[0].restaurant_id },
       process.env.JWT_SECRET,
-      { expiresIn: '1d' }
+      { expiresIn: '365d' }
     );
 
     res.json({ 
@@ -162,7 +162,7 @@ app.post('/api/auth/google', async (req, res) => {
     const jwtToken = jwt.sign(
       { id: user.id, role: user.role, restaurant_id: user.restaurant_id },
       process.env.JWT_SECRET,
-      { expiresIn: '1d' }
+      { expiresIn: '365d' }
     );
 
     res.json({ 
