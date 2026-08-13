@@ -63,10 +63,10 @@ async function sendOtpCode(userId, email) {
     }
   } else {
     // Mock Email
-    console.log(`\n========================================`);
+    console.log(`n========================================`);
     console.log(`[MOCK EMAIL] To: ${email}`);
     console.log(`[MOCK EMAIL] Body: Your Maraki Food verification code is: ${otpCode}`);
-    console.log(`========================================\n`);
+    console.log(`========================================n`);
   }
 }
 
@@ -687,7 +687,7 @@ app.post('/api/orders', upload.single('receipt'), async (req, res) => {
         const userRes = await db.query('SELECT name, email FROM users WHERE id = $1', [user_id || 1]);
         const user = userRes.rows[0];
         
-        const tx_ref = \`maraki-tx-\${orderId}-\${Date.now()}\`;
+        const tx_ref = `maraki-tx-${orderId}-${Date.now()}`;
         
         // Save tx_ref in the order for later verification
         await db.query('UPDATE orders SET transaction_id = $1 WHERE id = $2', [tx_ref, orderId]);
@@ -695,7 +695,7 @@ app.post('/api/orders', upload.single('receipt'), async (req, res) => {
         const chapaResponse = await fetch('https://api.chapa.co/v1/transaction/initialize', {
           method: 'POST',
           headers: {
-            'Authorization': \`Bearer \${process.env.CHAPA_SECRET_KEY}\`,
+            'Authorization': `Bearer ${process.env.CHAPA_SECRET_KEY}`,
             'Content-Type': 'application/json'
           },
           body: JSON.stringify({
@@ -705,11 +705,11 @@ app.post('/api/orders', upload.single('receipt'), async (req, res) => {
             first_name: user?.name ? user.name.split(' ')[0] : 'Customer',
             last_name: user?.name ? user.name.split(' ').slice(1).join(' ') : 'Doe',
             tx_ref: tx_ref,
-            callback_url: \`https://maraki-food-backend.onrender.com/api/orders/chapa-webhook\`,
-            return_url: \`https://maraki-food-frontend.vercel.app/payment-verify?tx_ref=\${tx_ref}\`,
+            callback_url: `https://maraki-food-backend.onrender.com/api/orders/chapa-webhook`,
+            return_url: `https://maraki-food-frontend.vercel.app/payment-verify?tx_ref=${tx_ref}`,
             customization: {
               title: 'Maraki Food Zones',
-              description: \`Payment for Order #\${orderId}\`
+              description: `Payment for Order #${orderId}`
             }
           })
         });
@@ -757,10 +757,10 @@ app.get('/api/orders/verify-payment/:tx_ref', async (req, res) => {
     }
 
     // Call Chapa to verify
-    const chapaRes = await fetch(\`https://api.chapa.co/v1/transaction/verify/\${tx_ref}\`, {
+    const chapaRes = await fetch(`https://api.chapa.co/v1/transaction/verify/${tx_ref}`, {
       method: 'GET',
       headers: {
-        'Authorization': \`Bearer \${process.env.CHAPA_SECRET_KEY}\`
+        'Authorization': `Bearer ${process.env.CHAPA_SECRET_KEY}`
       }
     });
 
