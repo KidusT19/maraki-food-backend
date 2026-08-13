@@ -647,9 +647,9 @@ app.post('/api/orders', upload.single('receipt'), async (req, res) => {
     const isLunch = currentDecimalTime >= 10 && currentDecimalTime <= 14;
     const isDinner = currentDecimalTime >= 17 && currentDecimalTime <= 19;
 
-    if (!isBreakfast && !isLunch && !isDinner) {
-      return res.status(403).json({ error: 'Outside of ordering windows (12-3 LT, 4-8 LT, 11-1 LT)' });
-    }
+    // if (!isBreakfast && !isLunch && !isDinner) {
+    //   return res.status(403).json({ error: 'Outside of ordering windows (12-3 LT, 4-8 LT, 11-1 LT)' });
+    // }
 
     const { user_id, restaurant_id, total_amount, transaction_id, delivery_address, customer_phone, payment_method = 'cash' } = req.body;
     let items = req.body.items;
