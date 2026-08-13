@@ -847,36 +847,90 @@ app.get('/api/orders/driver/earnings', authMiddleware, async (req, res) => {
     const FLAT_FEE = 50; // ETB
 
     const query = `
-      SELECT id, created_at, total_amount
-      FROM orders 
-      WHERE driver_id = $1 AND status = 'delivered'
-      ORDER BY created_at DESC
+      SELECT o.id, o.created_at, o.total_amount, r.name as restaurant_name
+      FROM orders o
+      LEFT JOIN restaurants r ON o.restaurant_id = r.id
+      WHERE o.driver_id = $1 AND o.status = 'delivered'
+      ORDER BY o.created_at DESC
     `;
     const result = await db.query(query, [driver_id]);
     const orders = result.rows;
 
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
+    const now = new Date();
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
     
-    const oneWeekAgo = new Date();
-    oneWeekAgo.setDate(oneWeekAgo.getDate() - 7);
-    oneWeekAgo.setHours(0, 0, 0, 0);
+    const oneWeekAgo = new Date(today);
+    oneWeekAgo.setDate(oneWeekAgo.getDate() - 6); // 7 days inclusive of today
 
     let todayCount = 0;
     let weekCount = 0;
 
+    const todayMap = {};
+    const weeklyMap = {};
+    const chartMap = {};
+
+    // Initialize chartData for the last 7 days to ensure all days show up
+    for (let i = 6; i >= 0; i--) {
+      const d = new Date(today);
+      d.setDate(d.getDate() - i);
+      const dayLabel = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+      chartMap[dayLabel] = 0;
+    }
+
     orders.forEach(o => {
       const d = new Date(o.created_at);
-      if (d >= today) todayCount++;
-      if (d >= oneWeekAgo) weekCount++;
+      const restName = o.restaurant_name || 'Unknown Restaurant';
+      
+      // Weekly analysis (last 7 days including today)
+      if (d >= oneWeekAgo) {
+        weekCount++;
+        
+        // Add to weekly map
+        if (!weeklyMap[restName]) weeklyMap[restName] = { restaurant: restName, earnings: 0, orderAmount: 0 };
+        weeklyMap[restName].earnings += FLAT_FEE;
+        weeklyMap[restName].orderAmount += 1;
+        
+        // Add to chart map
+        const dayLabel = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+        if (chartMap[dayLabel] !== undefined) {
+          chartMap[dayLabel] += FLAT_FEE;
+        }
+      }
+
+      // Today analysis
+      if (d >= today) {
+        todayCount++;
+        if (!todayMap[restName]) todayMap[restName] = { restaurant: restName, earnings: 0, orderAmount: 0 };
+        todayMap[restName].earnings += FLAT_FEE;
+        todayMap[restName].orderAmount += 1;
+      }
     });
+
+    const todayAnalysis = Object.values(todayMap).map(item => ({
+      ...item,
+      day: today.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+    }));
+
+    const startDateLabel = oneWeekAgo.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    const endDateLabel = today.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    const weeklyAnalysis = Object.values(weeklyMap).map(item => ({
+      ...item,
+      days: `${startDateLabel} - ${endDateLabel}`
+    }));
+
+    const chartData = Object.keys(chartMap).map(day => ({
+      day,
+      earnings: chartMap[day]
+    }));
 
     res.json({
       todayEarnings: todayCount * FLAT_FEE,
       weeklyEarnings: weekCount * FLAT_FEE,
       totalEarnings: orders.length * FLAT_FEE,
       totalDeliveries: orders.length,
-      recentDeliveries: orders.slice(0, 20) // send top 20 for the ledger
+      todayAnalysis,
+      weeklyAnalysis,
+      chartData
     });
   } catch (error) {
     console.error(error);
