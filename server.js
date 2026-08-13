@@ -14,9 +14,11 @@ const { OAuth2Client } = require('google-auth-library');
 const http = require('http');
 const { Server } = require('socket.io');
 const migrateEmail = require('./migrate_email');
+const migratePayments = require('./migrate_payments');
 
 // Run migration on startup
 migrateEmail().catch(console.error);
+migratePayments().catch(console.error);
 
 
 
@@ -649,7 +651,7 @@ app.post('/api/orders', upload.single('receipt'), async (req, res) => {
       return res.status(403).json({ error: 'Outside of ordering windows (12-3 LT, 4-8 LT, 11-1 LT)' });
     }
 
-    const { user_id, restaurant_id, total_amount, transaction_id, delivery_address, customer_phone } = req.body;
+    const { user_id, restaurant_id, total_amount, transaction_id, delivery_address, customer_phone, payment_method = 'cash' } = req.body;
     let items = req.body.items;
     
     // items will be a string if sent via FormData
@@ -663,8 +665,8 @@ app.post('/api/orders', upload.single('receipt'), async (req, res) => {
     await db.query('BEGIN');
     
     const newOrder = await db.query(
-      'INSERT INTO orders (user_id, restaurant_id, total_amount, status, transaction_id, receipt_screenshot, delivery_address, customer_phone) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *',
-      [user_id || 1, restaurant_id, total_amount, 'pending', transaction_id, receipt_screenshot, delivery_address, customer_phone]
+      'INSERT INTO orders (user_id, restaurant_id, total_amount, status, transaction_id, receipt_screenshot, delivery_address, customer_phone, payment_method, payment_status) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *',
+      [user_id || 1, restaurant_id, total_amount, 'pending', transaction_id, receipt_screenshot, delivery_address, customer_phone, payment_method, payment_method === 'chapa' ? 'pending' : 'not_applicable']
     );
     const orderId = newOrder.rows[0].id;
 
@@ -676,11 +678,117 @@ app.post('/api/orders', upload.single('receipt'), async (req, res) => {
     }
     
     await db.query('COMMIT');
-    res.status(201).json(newOrder.rows[0]);
+
+    let chapaCheckoutUrl = null;
+
+    if (payment_method === 'chapa' && process.env.CHAPA_SECRET_KEY) {
+      try {
+        // Get user details for Chapa
+        const userRes = await db.query('SELECT name, email FROM users WHERE id = $1', [user_id || 1]);
+        const user = userRes.rows[0];
+        
+        const tx_ref = \`maraki-tx-\${orderId}-\${Date.now()}\`;
+        
+        // Save tx_ref in the order for later verification
+        await db.query('UPDATE orders SET transaction_id = $1 WHERE id = $2', [tx_ref, orderId]);
+
+        const chapaResponse = await fetch('https://api.chapa.co/v1/transaction/initialize', {
+          method: 'POST',
+          headers: {
+            'Authorization': \`Bearer \${process.env.CHAPA_SECRET_KEY}\`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            amount: total_amount,
+            currency: 'ETB',
+            email: user?.email || 'customer@marakifood.com',
+            first_name: user?.name ? user.name.split(' ')[0] : 'Customer',
+            last_name: user?.name ? user.name.split(' ').slice(1).join(' ') : 'Doe',
+            tx_ref: tx_ref,
+            callback_url: \`https://maraki-food-backend.onrender.com/api/orders/chapa-webhook\`,
+            return_url: \`https://maraki-food-frontend.vercel.app/payment-verify?tx_ref=\${tx_ref}\`,
+            customization: {
+              title: 'Maraki Food Zones',
+              description: \`Payment for Order #\${orderId}\`
+            }
+          })
+        });
+
+        const chapaData = await chapaResponse.json();
+        
+        if (chapaData.status === 'success') {
+          chapaCheckoutUrl = chapaData.data.checkout_url;
+        } else {
+          console.error('Chapa initialization failed:', chapaData);
+        }
+      } catch (err) {
+        console.error('Error communicating with Chapa:', err);
+      }
+    }
+
+    res.status(201).json({
+      ...newOrder.rows[0],
+      checkout_url: chapaCheckoutUrl
+    });
   } catch (error) {
     await db.query('ROLLBACK');
     console.error(error);
     res.status(500).json({ error: 'Server error' });
+  }
+});
+
+app.get('/api/orders/verify-payment/:tx_ref', async (req, res) => {
+  try {
+    const { tx_ref } = req.params;
+    
+    // Check order
+    const orderRes = await db.query('SELECT * FROM orders WHERE transaction_id = $1', [tx_ref]);
+    if (orderRes.rows.length === 0) {
+      return res.status(404).json({ error: 'Order not found' });
+    }
+    
+    const order = orderRes.rows[0];
+    if (order.payment_status === 'paid') {
+      return res.json({ success: true, message: 'Payment already verified', order });
+    }
+
+    if (!process.env.CHAPA_SECRET_KEY) {
+      return res.status(500).json({ error: 'Chapa key not configured' });
+    }
+
+    // Call Chapa to verify
+    const chapaRes = await fetch(\`https://api.chapa.co/v1/transaction/verify/\${tx_ref}\`, {
+      method: 'GET',
+      headers: {
+        'Authorization': \`Bearer \${process.env.CHAPA_SECRET_KEY}\`
+      }
+    });
+
+    const chapaData = await chapaRes.json();
+    
+    if (chapaData.status === 'success' && chapaData.data.status === 'success') {
+      await db.query('UPDATE orders SET payment_status = $1 WHERE id = $2', ['paid', order.id]);
+      return res.json({ success: true, message: 'Payment verified successfully' });
+    } else {
+      return res.status(400).json({ success: false, message: 'Payment not successful yet' });
+    }
+  } catch (err) {
+    console.error('Verify payment error:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+app.post('/api/orders/chapa-webhook', async (req, res) => {
+  // Chapa webhook for background confirmation
+  try {
+    const { tx_ref, status } = req.body;
+    if (status === 'success') {
+      await db.query('UPDATE orders SET payment_status = $1 WHERE transaction_id = $2', ['paid', tx_ref]);
+    }
+    res.sendStatus(200);
+  } catch (err) {
+    console.error('Webhook error:', err);
+    res.sendStatus(500);
   }
 });
 
