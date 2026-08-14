@@ -708,8 +708,8 @@ app.post('/api/orders', upload.single('receipt'), async (req, res) => {
             callback_url: `https://maraki-food-backend.onrender.com/api/orders/chapa-webhook`,
             return_url: `https://maraki-food-frontend.vercel.app/payment-verify?tx_ref=${tx_ref}`,
             customization: {
-              title: 'Maraki Food Zones',
-              description: `Payment for Order #${orderId}`
+              title: 'Maraki Food',
+              description: `Payment for Order ${orderId}`
             }
           })
         });
