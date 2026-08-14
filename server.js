@@ -639,8 +639,9 @@ app.post('/api/orders', upload.single('receipt'), async (req, res) => {
     const eatTimeStr = now.toLocaleTimeString('en-US', { timeZone: 'Africa/Addis_Ababa', hour12: false });
     let [hourStr, minuteStr] = eatTimeStr.split(':');
     if (hourStr === '24') hourStr = '0';
-    const eatHour = parseInt(hourStr, 10);
+    let eatHour = parseInt(hourStr, 10);
     const eatMinute = parseInt(minuteStr, 10);
+    eatHour = (eatHour + 1) % 24; // Apply +1 hour offset to match frontend
     const currentDecimalTime = eatHour + (eatMinute / 60);
 
     const isBreakfast = currentDecimalTime >= 6 && currentDecimalTime <= 9;
