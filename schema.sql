@@ -40,6 +40,7 @@ CREATE TABLE menu_items (
     description TEXT,
     price DECIMAL(10,2) NOT NULL,
     image_url VARCHAR(255),
+    is_available INTEGER DEFAULT 1,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
