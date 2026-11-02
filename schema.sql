@@ -10,10 +10,13 @@ DROP TABLE IF EXISTS users;
 -- Users Table (Customers, Admins, Drivers)
 CREATE TABLE users (
     id SERIAL PRIMARY KEY,
-    name VARCHAR(100) NOT NULL,
+    name VARCHAR(255) NOT NULL,
     email VARCHAR(255) UNIQUE NOT NULL,
     password VARCHAR(255) NOT NULL,
-    role VARCHAR(50) DEFAULT 'customer',
+    role VARCHAR(50) DEFAULT 'customer', -- customer, restaurant, driver, superadmin
+    phone VARCHAR(20),
+    driver_lat DECIMAL(10,8),
+    driver_lng DECIMAL(11,8),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -24,6 +27,8 @@ CREATE TABLE restaurants (
     description TEXT,
     image_url VARCHAR(255),
     rating DECIMAL(2,1) DEFAULT 0.0,
+    latitude DECIMAL(10,8),
+    longitude DECIMAL(11,8),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -49,6 +54,8 @@ CREATE TABLE orders (
     receipt_screenshot VARCHAR(255),
     driver_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
     delivery_address TEXT,
+    delivery_lat DECIMAL(10,8),
+    delivery_lng DECIMAL(11,8),
     customer_phone VARCHAR(20),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );

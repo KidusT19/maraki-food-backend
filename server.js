@@ -15,10 +15,12 @@ const http = require('http');
 const { Server } = require('socket.io');
 const migrateEmail = require('./migrate_email');
 const migratePayments = require('./migrate_payments');
+const migrateTracking = require('./migrate_tracking');
 
 // Run migration on startup
 migrateEmail().catch(console.error);
 migratePayments().catch(console.error);
+migrateTracking().catch(console.error);
 
 
 
@@ -527,6 +529,40 @@ app.get('/api/restaurants/:id/reviews', async (req, res) => {
       ORDER BY r.created_at DESC
     `, [id]);
     res.json(reviews.rows);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// Update Restaurant Details (Name, Description, Image)
+app.put('/api/restaurants/:id', authMiddleware, upload.single('image'), async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { name, description } = req.body;
+    
+    // Check permission: superadmin or restaurant owner of this restaurant
+    if (req.user.role !== 'superadmin' && (req.user.role !== 'restaurant' || req.user.restaurant_id != id)) {
+      return res.status(403).json({ error: 'Unauthorized to modify this restaurant' });
+    }
+
+    let updateQuery = 'UPDATE restaurants SET name = COALESCE($1, name), description = COALESCE($2, description)';
+    let params = [name || null, description || null];
+
+    if (req.file) {
+      updateQuery += ', image_url = $3 WHERE id = $4 RETURNING *';
+      params.push(req.file.path, id);
+    } else {
+      updateQuery += ' WHERE id = $3 RETURNING *';
+      params.push(id);
+    }
+
+    const updated = await db.query(updateQuery, params);
+    if (updated.rows.length === 0) {
+      return res.status(404).json({ error: 'Restaurant not found' });
+    }
+
+    res.json(updated.rows[0]);
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: 'Server error' });
